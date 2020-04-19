@@ -10,7 +10,7 @@ from torch.nn import functional as F
 from garage.envs import normalize
 from garage.envs.base import GarageEnv
 from garage.experiment import deterministic, LocalRunner
-from garage.replay_buffer import SimpleReplayBuffer
+from garage.replay_buffer import PathBuffer
 from garage.sampler import LocalSampler
 from garage.torch.algos import SAC
 from garage.torch.policies import TanhGaussianMLPPolicy
@@ -102,7 +102,7 @@ def testCriticLoss():
     rewards = torch.FloatTensor([10, 20])
     terminals = torch.Tensor([[0.], [0.]])
     next_observations = torch.FloatTensor([[5, 6], [7, 8]])
-    samples = {
+    samples_data = {
         'observation': observations,
         'action': actions,
         'reward': rewards,
@@ -115,7 +115,7 @@ def testCriticLoss():
     # Expected critic loss has factor of 2, for the two TD3 critics.
     expected_loss = 2 * F.mse_loss(torch.Tensor(td_targets),
                                    torch.Tensor(pred_td_targets))
-    loss = sac._critic_objective(samples)
+    loss = sac._critic_objective(samples_data)
     assert np.all(np.isclose(np.sum(loss), expected_loss))
 
 
@@ -140,9 +140,10 @@ def testActorLoss():
     observations = torch.Tensor([[1., 2.], [3., 4.]])
     action_dists = policy(observations)
     actions = torch.Tensor(action_dists.rsample_with_pre_tanh_value())
+    samples_data = dict(observation=observations)
     log_pi = action_dists.log_prob(actions)
     expected_loss = (2 * 10 - (2 + 1) - (4 + 1)) / 2
-    loss = sac._actor_objective(observations, actions, log_pi)
+    loss = sac._actor_objective(samples_data, actions, log_pi)
     assert np.all(np.isclose(loss, expected_loss))
 
 
@@ -167,13 +168,14 @@ def testTemperatureLoss():
     action_dists = policy(observations)
     actions = action_dists.rsample_with_pre_tanh_value()
     log_pi = action_dists.log_prob(actions)
+    samples_data = dict(observation=observations, action=actions)
     expected_loss = 4.0 * (-10 - 3)
-    loss = sac._temperature_objective(log_pi).item()
+    loss = sac._temperature_objective(log_pi, samples_data).item()
     assert np.all(np.isclose(loss, expected_loss))
 
 
 @pytest.mark.mujoco
-def test_sac_inverted_pendulum():
+def test_sac_inverted_double_pendulum():
     """Test Sac performance on inverted pendulum."""
     # pylint: disable=unexpected-keyword-arg
     env = GarageEnv(normalize(gym.make('InvertedDoublePendulum-v2')))
@@ -194,9 +196,7 @@ def test_sac_inverted_pendulum():
     qf2 = ContinuousMLPQFunction(env_spec=env.spec,
                                  hidden_sizes=[32, 32],
                                  hidden_nonlinearity=F.relu)
-    replay_buffer = SimpleReplayBuffer(env_spec=env.spec,
-                                       size_in_transitions=int(1e6),
-                                       time_horizon=1)
+    replay_buffer = PathBuffer(capacity_in_transitions=int(1e6), )
     runner = LocalRunner(snapshot_config=snapshot_config)
     sac = SAC(env_spec=env.spec,
               policy=policy,
